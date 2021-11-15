@@ -1,0 +1,244 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="author" content="Eik Lin Wong (eiklin.wong@singtel.com)">
+  <meta name="description" content="Singtel AWS EC2 Price List Generator">
+  <meta name="keywords" content="AWS,EC2,Price List API,Generator">
+  <link rel="shortcut icon" href="/images/favicon.ico" type="image/x-icon" />
+  <title>Singtel AWS EC2 Price Generator</title>
+  <link rel="stylesheet" href="/css/ui.css">
+  <script src="//code.jquery.com/jquery-1.12.1.js"></script>
+  <script src="//code.jquery.com/ui/1.12.1/jquery-ui.js"></script>
+  <style>
+    body, input { font-size: 12.5px; font-family:calibri,arial;}
+    tbody {vertical-align: top;}
+    a, a:hover, a:visited {color:#e50026;}
+    li {margin-bottom: 10px;}
+    input[type="radio"] {margin-top:0px;vertical-align:middle;}
+    input[type="checkbox"] {float:left; margin:0 auto;}
+    input.text { margin-bottom:12px; padding: .4em; }
+    div#servers-container { float:left; margin: 5px 0; }
+    div#servers-container table { margin: 5px; border-collapse: collapse; }
+    div#servers-container table td, div#servers-container table th { border: 1px solid #eee; padding: .5em 10px; text-align: left; }
+    .ui-dialog .ui-state-error { padding: .3em; }
+    .validateTips { border: 1px solid transparent; padding: 0.3em; }
+  </style>
+  <script>
+  
+  if (window.location == "https://singtel.z23.web.core.windows.net/aws") {window.location.replace("https://singtel.z23.web.core.windows.net/aws/");}
+
+  region = "Asia Pacific (Singapore)"
+  instances = {}
+
+  function update() {
+    
+    c = $("#cores").val().trim();
+    if (!c) {return;}
+
+    m = $("#memory").val().trim();
+    if (!m) {return;}
+
+    s = $("#sql:checked").val();
+    if (!s) {return;}
+
+    terms = $("#terms:checked").val();
+    if (!s) {return;}
+
+    os = $("#operatingSystems:checked").val();
+    if (!os) {return;}
+
+    env = $("#environment:checked").val();
+    if (!env) {return;}
+
+    tenancy = $("#tenancy:checked").val();
+    if (!tenancy) {return;}
+
+    if (os != "Windows" && os != "Linux") {
+      $('input[name="sql"][value="NA"]').prop('checked', true);
+      s = "NA";
+      $('input[name="sql"]').attr('disabled', true);
+    }
+    else {$('input[name="sql"]').attr('disabled', false);}
+
+    region = $("#regions option:selected").text();
+
+    scored = [];
+
+    // Score each instance
+    for(var i=0; i<instances[region].length; i++) {
+      instance = instances[region][i];
+      dc = instance['vcpu'];
+      dm = instance['memory'].replace(",","");
+      ds = instance['preInstalledSw'];
+      dos = instance['operatingSystem'];
+      dt = instance['instanceType'];
+      dl = instance['licenseModel'];
+      dtenancy = instance['tenancy'];
+
+      if (dtenancy == "Reserved") {dtenancy = "Host";}
+
+      if (dos == "Windows" && dl == "Bring your own license") {dos = "Windows (BYOL)";}
+
+      if ((dc >= Number(c)) && ((dm >= Number(m) || dm == "NA")) && (ds == s) && (dos == os) && (dtenancy == tenancy)) {
+          
+        if (terms == "costOnDemand") {score = instance['costOnDemand'];}
+        if (terms == "costReserved1Year") {score = instance['costReserved1Year'];}
+        if (terms == "costReserved3Year") {score = instance['costReserved3Year'];}
+
+        if (score != 0) {
+          instance['score'] = score;
+          
+          if (env == 'nonprod') {
+            if (dt.startsWith("t1") || dt.startsWith("t2") || dt.startsWith("t3")) {scored.push(instance);}
+          }
+          else {
+            if (!dt.startsWith("t1") && !dt.startsWith("t2") && !dt.startsWith("t3")) {scored.push(instance);}
+          }
+        }
+      }
+    }
+    // Sort by cost asc then by vcpu desc
+    sorted = scored.sort(function(a, b){return a['score']-b['score'] || b['vcpu']-a['vcpu'];});
+
+    $("#instances tbody").empty();
+
+    if (sorted.length != 0) {
+      for(var i=0; i<sorted.length; i++) {
+        instance = scored[i];
+        $( "#instances tbody" ).append( "<tr class=\"server\">" +
+          "<td><div style=\"cursor:help;\" title=\"sku: " + instance['sku'] + "\">" + instance['instanceType'] + "</div></td>" +
+          "<td><div style=\"cursor:help;\" title=\"" + instance['physicalProcessor'] + ", " + instance['clockSpeed'] + "\">" + instance ['vcpu'] + "</div></td>" +
+          "<td>" + instance['memory'].replace(/\B(?=(\d{3})+\b)/g, ",") + "</td>" +
+          "<td>" + instance['operatingSystem'] + "</td>" +
+          "<td>" + instance['preInstalledSw'] + "</td>" +
+          "<td><div style=\"cursor:help;\" title=\"Per hour: " + instance['score'] + " USD\">" + ((instance['score']*732).toFixed(2)).replace(/\B(?=(\d{3})+\b)/g, ",") + "<div></td>" +
+          "</tr>" );
+      }
+    }
+    else {$( "#instances tbody" ).append( "<tr><td colspan=\"6\" style=\"text-align:center;\">No information found</td></tr>");};
+  }
+
+  $(function() {
+
+    $("#regions").selectmenu();
+
+    $('#regions').on('selectmenuchange', function(e) {update();});
+
+    $('#cores, #memory, #sql, #operatingSystems, #environment, #licenseModel, #terms, #tenancy').on('change', function(e) {update();});
+
+    $.ajax({url: "prices.json", context: $(this)}).success(function(resp) {
+      instances = resp["instances"];
+
+      $("#regions").empty();
+
+      region_sorted = [];
+      for(var key in instances) {
+        region_sorted[region_sorted.length] = key;
+      }
+      region_sorted.sort();
+
+      for (var i=0; i<region_sorted.length; i++) {
+        $("#regions").append("<option>" + region_sorted[i] + "</option>");
+      }
+
+      $('#regions').val(region);
+      $("#regions").selectmenu("refresh");
+
+      $('#published').text(resp["published"]);
+      $('#generated').text(resp["created"]);
+
+      update();
+
+    });
+  });
+  </script>
+</head>
+<body>
+<img src="/images/logo.png" width="150" style="float: left; margin-right:15px;">
+<p><div style="font-size:18px; font-weight:bold;"><a href="https://cloud.singtel.com" target="_window">Singtel</a> AWS EC2 Price Generator. All rights reserved.</b></div></p>
+AWS Price List date: <span id="published"></span><br>
+Last refreshed date: <span id="generated"></span>
+<p><a href="https://aws.amazon.com/blogs/aws/category/compute/amazon-ec2/" target="_window">Latest updates on AWS EC2</a></p>
+<div id="servers-container">
+  <table id="servers">
+    <thead>
+      <tr class="ui-widget-header">
+        <th>AWS Region</th>
+        <th>Environment <span style="cursor:help;" title="Traditional Amazon EC2 instance types provide fixed performance, while burstable performance instances provide a baseline level of CPU performance with the ability to burst above that baseline level.
+        
+Burstable perfomance instances (i.e. t1/t2/t3 instances) are suitable for workloads that require mostly moderate levels of CPU utilisation and short periods of high CPU utilisation within a 24-hour cycle. Possible candidates are QA and development workloads, as well as production workloads with occasional high CPU utilisation.">[?]</span></th>
+        <th>vCPU</th>
+        <th>Memory (GB)</th>
+        <th>Operating System</th>
+        <th>SQL Edition (for Windows and Linux only)</th>
+        <th>Tenancy <span style="cursor:help;" title="'Shared' tenancy means that multiple EC2 instances from different customers/tenants may reside on the same piece of physical hardware.
+
+'Dedicated Instances' means that your EC2 instances will only run on hardware with other instances that you’ve deployed, no other customers/tenants will use the same piece of hardware as you.
+
+With 'Dedicated Hosts', you purchase an entire physical host from AWS and that host is billed to you regardless of the quantity or the size of instances that you choose to launch.">[?]</span></th>
+        <th>Payment Terms</th>
+      </tr>
+    </thead>
+    <tbody>
+      <td>
+        <select name="regions" id="regions"><option>Loading...</option></select></td>
+      <td>
+        <input type="radio" name="environment" id="environment" value="prod" checked>Fixed Performance<br>
+        <input type="radio" name="environment" id="environment" value="nonprod">Burstable Performance</td>
+      <td>
+        <input type="number" name="cores" id="cores" class="text ui-widget-content ui-corner-all" style="width:2.5em;" value="1" min="1"></td>
+      <td>
+        <input type="number" name="memory" id="memory" class="text ui-widget-content ui-corner-all" style="width:3em;" value="0.5" min="0"></td>
+      <td>
+        <input type="radio" name="operatingSystems" id="operatingSystems" value="Linux" checked>Linux
+        <input type="radio" name="operatingSystems" id="operatingSystems" value="Windows">Windows<br>
+        <input type="radio" name="operatingSystems" id="operatingSystems" value="RHEL">Red Hat Enterprise Linux<br>
+        <input type="radio" name="operatingSystems" id="operatingSystems" value="SUSE">SUSE Linux Enterprise Server<br>
+        <input type="radio" name="operatingSystems" id="operatingSystems" value="Windows (BYOL)">Windows (BYOL) <span style="cursor:help;" title="Customers can bring their own Windows license ('Bring-Your-Own-License') into AWS public cloud subject to Microsoft’s terms.
+
+Please ensure that customer has a relevant agreement (e.g. Software Assurance) with Microsoft before enabling this option.">[?]</span></td>
+      <td>
+        <input type="radio" name="sql" id="sql" value="NA" checked>None/SQL Express<br>
+        <input type="radio" name="sql" id="sql" value="SQL Web">SQL Web
+        <input type="radio" name="sql" id="sql" value="SQL Std">SQL Standard<br>
+        <input type="radio" name="sql" id="sql" value="SQL Ent">SQL Enterprise</td>
+      <td>
+        <input type="radio" name="tenancy" id="tenancy" value="Shared" checked>Shared<br>
+        <input type="radio" name="tenancy" id="tenancy" value="Dedicated">Dedicated Instances<br>
+        <input type="radio" name="tenancy" id="tenancy" value="Host">Dedicated Hosts</td>
+      <td>
+        <input type="radio" name="terms" id="terms" value="costOnDemand" checked>Pay-As-You-Go (No Upfront)<br>
+        <input type="radio" name="terms" id="terms" value="costReserved1Year">1 year reserved (No Upfront)<br>
+        <input type="radio" name="terms" id="terms" value="costReserved3Year">3 year reserved (No Upfront)</td>
+    </tbody>
+  </table>
+  <table id="instances" style="float: left; margin-right:15px;">
+    <thead>
+      <tr class="ui-widget-header">
+        <th>Instance Type</th>
+        <th>vCPU</th>
+        <th>Memory (GB)</th>
+        <th>Operating System</th>
+        <th>SQL Edition</th>
+        <th>Price (Monthly, USD)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td colspan="6" style="text-align:center;">Loading...</td></tr>
+    </tbody>
+  </table>
+  <table><tr><td style="border-collapse: collapse;border: 0px;">
+    <p><b>INSTRUCTIONS</b></p>
+     <li>Enter the cpu, memory requirements and select the appropriate options. A list of suitable EC2 will be presented in order of increasing price.</li>
+    <p><b>NOTE</b></p>
+    <li>The Singtel AWS EC2 Price Generator presents an alternative workflow from the official <a href="https://calculator.s3.amazonaws.com/index.html" target="_awscalculator">AWS Simple Monthly Calculator</a>. Based on customer projects so far, the requirement has always been to determine the EC2 type that can fulfill the cpu and memory requirements at the lowest price. This can be difficult without technical understanding across all EC2 types. The price generator will now be able to suggest a list of possible EC2s across the entire suite; you no longer need to self-determine the exact EC2 type.</li>
+    <li>Refer to <a href="https://aws.amazon.com/ec2/pricing/" target="_window ">AWS EC2 Price List</a> for a detailed explanation on the pricing of AWS EC2. To compute the pricing for other AWS services, please use the official <a href="https://calculator.s3.amazonaws.com/index.html" target="_awscalculator">AWS Simple Monthly Calculator</a>.</li>
+    <li>This website is hosted on Azure Blob and AJAX/jQuery is used to process data in JSON format. It is not recommended to use this website on metered network since client traffic may be excessive.</li>
+    <li>First developed by Eik Lin Wong (eiklin.wong@singtel.com), Singtel EDMS. Created on Aug 2018, updated on Oct 2018. Optimised for Google Chrome. Inspired by <a href="https://blog.rackspace.com/experimenting-aws-price-list-api" target="_window">https://blog.rackspace.com/experimenting-aws-price-list-api</a> based on the <a href="https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/using-ppslong.html" target="_windows">AWS Price List API</a>.</li>
+    <li>This price generator is a work-in-progress. It does not guarantee accuracy of data and does not provide any warranty for the use of it.</li>
+  </td></tr></table>
+</div>
+</body>
+</html>
